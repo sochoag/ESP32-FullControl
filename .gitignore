@@ -1,0 +1,24 @@
+# --- PlatformIO (C++) ---
+.pio/
+.pioenvs/
+.piolibdeps/
+*.bin
+*.elf
+
+# --- Node.js / React (Frontend) ---
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json # Opcional: Muchos lo guardan, otros no. Yo recomiendo GUARDARLO (bórralo de aquí si quieres versionarlo).
+
+# --- Build Output (Archivos Generados) ---
+# Ignoramos 'data' porque Vite la borra y la regenera en cada build.
+# No tiene sentido versionar el resultado, sino el código fuente.
+data/
+dist/
+
+# --- VSCode / Sistema ---
+.vscode/
+!.vscode/extensions.json # Excepción: Esto sí es útil compartirlo
+.DS_Store
+Thumbs.db
