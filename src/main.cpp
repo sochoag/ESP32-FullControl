@@ -6,112 +6,154 @@
 #include <ArduinoJson.h>
 #include <Adafruit_NeoPixel.h>
 #include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 
-// --- Configuracion WIFI ---
+// ==========================================
+// CONFIGURACIÓN GENERAL
+// ==========================================
 const char* ssid = "sochoag";
 const char* password = "sochoagu";
+const char* hostname = "esp32s3"; // Un solo nombre para mDNS y OTA
 
-// CONFIGURACIÓN NEOPIXEL ESP32-S3
-// IMPORTANTE: Verifica si tu pin es 48, 38 o 21 según tu fabricante.
+// Hardware
 #define PIN_NEO 48 
 #define NUMPIXELS 1
 
+// ==========================================
+// OBJETOS GLOBALES
+// ==========================================
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN_NEO, NEO_GRB + NEO_KHZ800);
-
-
-// Creamos el servidor en el puerto 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-// --- LÓGICA WEBSOCKET ---
+// ==========================================
+// ESTADO DEL SISTEMA (Variables Globales)
+// ==========================================
+// Guardamos el estado aquí para poder enviarlo por Telemetría luego
+int currentR = 0;
+int currentG = 0;
+int currentB = 0;
+
+// ==========================================
+// FUNCIONES AUXILIARES
+// ==========================================
+
+// Función dedicada a aplicar el color y actualizar variables
+void updateColor(int r, int g, int b) {
+  currentR = r;
+  currentG = g;
+  currentB = b;
+  pixels.setPixelColor(0, pixels.Color(r, g, b));
+  pixels.show();
+}
+
+// Manejador de eventos WebSocket
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
-  // Solo nos interesa cuando llega data (texto)
   if (type == WS_EVT_DATA) {
     AwsFrameInfo *info = (AwsFrameInfo*)arg;
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
       
-      // Parseamos el JSON recibido: {"r":255, "g":0, "b":0}
-      // Añadimos el caracter nulo al final para convertirlo en string seguro
-      data[len] = 0;
-      
+      data[len] = 0; // Null termination
       StaticJsonDocument<200> doc;
       DeserializationError error = deserializeJson(doc, (char*)data);
 
       if (!error) {
-        int r = doc["r"];
-        int g = doc["g"];
-        int b = doc["b"];
-        
-        pixels.setPixelColor(0, pixels.Color(r, g, b));
-        pixels.show();
-        
-        // Opcional: Responder a todos los clientes conectados el nuevo color
-        // ws.textAll((char*)data); 
+        // Si recibimos JSON, actualizamos el color usando nuestra función centralizada
+        if (doc.containsKey("r") && doc.containsKey("g") && doc.containsKey("b")) {
+            updateColor(doc["r"], doc["g"], doc["b"]);
+        }
       }
     }
   }
 }
 
-
-void setup() {
-  // 1. Iniciar Monitor Serie para depuracion
-  Serial.begin(115200);
-  while (!Serial) {
-    delay(10);
-  }
-
-  // Iniciar Neopixel
-  pixels.begin();
-  pixels.setBrightness(255); // Brillo moderado (0-255)
-  pixels.clear();
-  pixels.show();
-
-  // 2. Iniciar el sistema de archivos LittleFS
-  // Esto es vital para poder leer el HTML/JS de React
-  if(!LittleFS.begin(true)){
-    Serial.println("Error al montar LittleFS. ¿Has subido el sistema de archivos?");
-    return;
-  }
-  Serial.println("LittleFS montado correctamente.");
-  
-  // 3. Conectar al WiFi
-  Serial.print("Conectando a WiFi...");
+// Configuración del WiFi
+void setupWiFi() {
+  WiFi.mode(WIFI_STA); // Modo Estación (cliente) explícito
+  WiFi.setHostname(hostname); // Asigna nombre a nivel de red
   WiFi.begin(ssid, password);
+  
+  Serial.print("Conectando a WiFi");
   while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
+    delay(500);
     Serial.print(".");
   }
-  Serial.println("\nConectado!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  Serial.println("\nWiFi Conectado.");
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
+}
 
-  // --- INICIO mDNS ---
-  // Esto nos permite entrar como "http://esp32s3.local"
-  if (!MDNS.begin("esp32s3")) { // <--- Puedes cambiar "esp32s3" por el nombre que quieras
-    Serial.println("Error configurando mDNS!");
-  } else {
-    Serial.println("mDNS iniciado! Entra a: http://esp32s3.local");
+// Configuración de OTA (Limpia y sin conflictos)
+void setupOTA() {
+  ArduinoOTA.setHostname(hostname); // Usamos el mismo nombre que definimos arriba
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) type = "sketch";
+    else type = "filesystem";
+    LittleFS.end(); // Desmontar FS para evitar corrupción
+    Serial.println("Start updating " + type);
+  });
+
+  ArduinoOTA.onEnd([]() { Serial.println("\nEnd"); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+  });
+
+  ArduinoOTA.begin();
+  Serial.println("OTA Listo");
+}
+
+// ==========================================
+// SETUP Y LOOP PRINCIPAL
+// ==========================================
+
+void setup() {
+  // 1. Serial (Sin bloqueo)
+  Serial.begin(115200);
+  // Eliminamos el while(!Serial) para que funcione con cargador de pared
+  delay(100); 
+
+  // 2. Hardware
+  pixels.begin();
+  pixels.setBrightness(50);
+  updateColor(255, 50, 0); // Iniciar apagado (o poner un color por defecto)
+
+  // 3. Sistema de Archivos
+  if(!LittleFS.begin(true)){
+    Serial.println("Error LittleFS");
+    return;
   }
-  // -------------------
 
-  // 1. Configurar manejador de WebSocket
+  // 4. Red y OTA
+  setupWiFi();
+  setupOTA();
+  
+  // 5. mDNS (Opcional explicito, OTA ya suele manejarlo, pero esto asegura el link web)
+  if (MDNS.begin(hostname)) {
+    Serial.println("mDNS responder started");
+  }
+
+  // 6. Servidor Web y Sockets
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
 
-  // 2. Rutas Web
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/index.html", "text/html");
   });
   server.serveStatic("/", LittleFS, "/");
-
+  
   server.begin();
-  Serial.println("Servidor Web iniciado.");
+  Serial.println("Servidor Web iniciado");
+  
+  // Feedback visual de que todo inició bien (Verde suave)
+  updateColor(0, 50, 0); 
 }
 
 void loop() {
-  // IMPORTANTE: Limpiar clientes desconectados para liberar memoria
+  ArduinoOTA.handle();
   ws.cleanupClients();
-  
-  // Pequeño delay para no saturar la CPU en el loop vacío
   delay(2);
 }
