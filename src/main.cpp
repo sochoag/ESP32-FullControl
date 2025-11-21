@@ -29,6 +29,10 @@ AsyncWebSocket ws("/ws");
 // ==========================================
 // ESTADO DEL SISTEMA (Variables Globales)
 // ==========================================
+// Variables para el control de tiempo (Telemetría)
+unsigned long lastTelemetryTime = 0;
+const long telemetryInterval = 2000;
+
 // Guardamos el estado aquí para poder enviarlo por Telemetría luego
 int currentR = 0;
 int currentG = 0;
@@ -47,8 +51,34 @@ void updateColor(int r, int g, int b) {
   pixels.show();
 }
 
+void notifyClients() {
+  StaticJsonDocument<300> doc; // Aumentamos un poco el tamaño
+  
+  // 1. Estado de la luz (para sincronizar interfaz)
+  doc["r"] = currentR;
+  doc["g"] = currentG;
+  doc["b"] = currentB;
+  
+  // 2. Datos técnicos (Telemetría)
+  doc["rssi"] = WiFi.RSSI();          // Potencia de señal WiFi
+  doc["uptime"] = millis() / 1000;    // Segundos encendido
+  doc["heap"] = ESP.getFreeHeap();    // Memoria RAM libre
+  
+  String json;
+  serializeJson(doc, json);
+  
+  // Enviar a todos los clientes conectados
+  ws.textAll(json);
+  Serial.println(json);
+}
+
+
 // Manejador de eventos WebSocket
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  if (type == WS_EVT_CONNECT ) {
+    Serial.printf("Cliente conectado ID: %u\n", client->id());
+  }
+  
   if (type == WS_EVT_DATA) {
     AwsFrameInfo *info = (AwsFrameInfo*)arg;
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
@@ -61,6 +91,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
         // Si recibimos JSON, actualizamos el color usando nuestra función centralizada
         if (doc.containsKey("r") && doc.containsKey("g") && doc.containsKey("b")) {
             updateColor(doc["r"], doc["g"], doc["b"]);
+            notifyClients();
         }
       }
     }
@@ -155,5 +186,13 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   ws.cleanupClients();
+
+  // Lógica de Telemetría (Non-blocking delay)
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastTelemetryTime >= telemetryInterval) {
+    lastTelemetryTime = currentMillis;
+    notifyClients(); // <--- Enviar estado cada 2 segundos
+  }
+
   delay(2);
 }
