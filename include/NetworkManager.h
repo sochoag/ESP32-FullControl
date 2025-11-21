@@ -4,5 +4,6 @@
 void initWiFi();
 void initOTA();
 void handleOTA();
+void resetWiFiSettings();
 
 #endif

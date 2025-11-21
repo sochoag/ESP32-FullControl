@@ -1,36 +1,29 @@
 #include <Arduino.h>
-#include "AppConfig.h"
 #include "LedController.h"
 #include "NetworkManager.h"
 #include "WebHandler.h"
-
-unsigned long lastTelemetryTime = 0;
+#include "InputManager.h"
 
 void setup() {
     Serial.begin(115200);
     delay(100);
 
-    // Iniciamos módulos uno por uno
-    initLeds();
-    initWiFi();
-    initOTA();
-    initServer();
+    // Inicialización de Módulos
+    initLeds();     // Luces
+    initInput();    // Botones
+    initWiFi();     // Red (o Portal de Configuración)
+    initOTA();      // Actualizaciones Aéreas
+    initServer();   // Web y WebSockets
     
-    // Señal visual de inicio correcto (Verde suave)
+    // Señal de "Sistema Listo"
     updateColor(0, 50, 0);
 }
 
 void loop() {
-    // Mantenimiento constante
-    handleOTA();
-    handleWebSockets();
-
-    // Telemetría periódica
-    unsigned long currentMillis = millis();
-    if (currentMillis - lastTelemetryTime >= TELEMETRY_INTERVAL) {
-        lastTelemetryTime = currentMillis;
-        sendTelemetry();
-    }
+    // Ciclo de vida de los módulos
+    handleOTA();      // Escuchar actualizaciones de firmware
+    handleWebTasks(); // Gestionar clientes web y enviar telemetría
+    handleInput();    // Escuchar botón físico (Reset)
     
-    delay(2);
+    delay(10); // Pequeño respiro para la CPU
 }

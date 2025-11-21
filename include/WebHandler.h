@@ -2,7 +2,6 @@
 #define WEB_HANDLER_H
 
 void initServer();
-void handleWebSockets(); // Cleanup
-void sendTelemetry();    // Enviar datos periódicos
+void handleWebTasks(); // <-- Renombramos para que sea más genérico
 
 #endif
