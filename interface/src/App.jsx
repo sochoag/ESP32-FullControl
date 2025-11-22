@@ -1,39 +1,82 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Info } from 'lucide-react';
 
 // Importación de Módulos
 import BoardView from './components/BoardView';
 import ControlPanel from './components/ControlPanel';
-import LogTerminal from './components/LogTerminal'; // <--- Importamos el nuevo componente
+import LogTerminal from './components/LogTerminal';
 import { useEsp32Socket } from './hooks/useEsp32Socket';
 import { PIN_DEF } from './data/pinConfig';
 import './App.css';
 
 export default function ESP32Dashboard() {
-  // Hook personalizado de conexión (Lógica)
-  const { isConnected, serverLog, addLog, sendCommand } = useEsp32Socket(); // Asegúrate que useEsp32Socket devuelva un 'setServerLog' o función 'clearLogs' si quieres limpiar.
-  // *Corrección pequeña*: Necesitamos poder limpiar los logs. 
-  // Vamos a asumir que pasamos serverLog y una función para limpiar.
-  // Si useEsp32Socket no expone 'setServerLog', lo haremos localmente o modificaremos el hook.
-  // Para simplificar, asumiré que useEsp32Socket maneja el estado. 
-  // *Mejor estrategia:* El estado de logs debería vivir aquí o ser expuesto.
-  // MODIFICACIÓN RÁPIDA: Vamos a manejar el clearLog aquí si el hook lo permite, 
-  // si no, pasamos una función vacía por ahora.
   
-  // ESTADO DE PINES (Visual)
+  // 1. ESTADO VISUAL (Configuración de pines)
   const [pinData, setPinData] = useState({});
   const [selectedPin, setSelectedPin] = useState(null);
 
-  // ESTADO DE LOGS (Si decidimos moverlo aquí para tener control total, o usamos el del hook)
-  // Nota: Si usas el hook tal cual te lo di antes, 'serverLog' viene del hook. 
-  // Necesitaríamos que el hook exponga 'clearLogs'.
-  // Agreguemos esa pequeña función dummy para que no falle el botón Clear.
+  // 2. MANEJADOR DE TELEMETRÍA (Datos que llegan del ESP32)
+  // Usamos useCallback para que la función sea estable y no reinicie el socket
+  // 2. MANEJADOR DE TELEMETRÍA
+  const handleIncomingData = useCallback((data) => {
+    // Debug en consola del navegador (F12) para ver si llegan datos
+    // console.log("Datos recibidos:", data); 
+
+    if (data.gpio) {
+      setPinData(prev => {
+        const nextState = { ...prev };
+        let hasChanges = false;
+
+        Object.keys(data.gpio).forEach(pinNum => {
+          const pinName = pinNum === '48' ? 'GPIO48' : `GPIO${pinNum}`;
+          const newVal = data.gpio[pinNum];
+          
+          // VERIFICACIÓN: ¿Tenemos este pin configurado en el Frontend?
+          if (nextState[pinName]) {
+            const mode = nextState[pinName].mode;
+            
+            // --- DEBUG VISUAL TEMPORAL ---
+            // Si seleccionas el pin, veremos en la consola del navegador qué está pasando
+            if (selectedPin === pinName) {
+               // console.log(`Pin ${pinName} (${mode}) -> Nuevo Valor: ${newVal}`);
+            }
+
+            // LÓGICA INPUT (Digital)
+            if (mode === 'INPUT') {
+               // Actualizamos siempre para asegurar sincronía
+               if (nextState[pinName].value !== newVal) {
+                   nextState[pinName] = { ...nextState[pinName], value: newVal };
+                   hasChanges = true;
+               }
+            }
+            // LÓGICA SENSORES (Touch / ADC)
+            else if (mode === 'TOUCH' || mode === 'ADC') {
+               // Umbral de ruido: Solo actualizamos si cambia lo suficiente para evitar renderizados locos
+               // O actualizamos siempre si es diferente.
+               if (nextState[pinName].adcVal !== newVal) {
+                   nextState[pinName] = { ...nextState[pinName], adcVal: newVal };
+                   hasChanges = true;
+               }
+            }
+          }
+        });
+
+        return hasChanges ? nextState : prev;
+      });
+    }
+  }, [selectedPin]); // Agregamos selectedPin para el debug (opcional)
+
+  // 3. CONEXIÓN WEBSOCKET
+  // Pasamos el callback al hook para que procese los mensajes
+  const { isConnected, serverLog, sendCommand, clearLogs: hookClearLogs } = useEsp32Socket(handleIncomingData);
+
+  // Wrapper para limpiar logs (si el hook no lo exporta, usa recarga como fallback)
   const clearLogs = () => {
-      // Idealmente, modifica useEsp32Socket.js para que retorne: { ..., clearLogs: () => setServerLog([]) }
-      console.log("Limpiar logs (Requiere actualizar hook)");
-      window.location.reload(); // Solución temporal drástica, mejor actualiza el hook.
+      if (hookClearLogs) hookClearLogs();
+      else window.location.reload();
   };
 
+  // Efecto inicial: Configurar LED onboard por defecto
   useEffect(() => {
     setPinData(prev => ({
       ...prev,
@@ -41,6 +84,7 @@ export default function ESP32Dashboard() {
     }));
   }, []);
 
+  // 4. ACCIONES DEL USUARIO
   const handlePinSelect = (pinName) => {
     const realPinName = pinName === 'RGB' ? 'GPIO48' : pinName;
     setSelectedPin(prev => prev === realPinName ? null : realPinName);
@@ -52,8 +96,8 @@ export default function ESP32Dashboard() {
       delete newState[pin];
       return newState;
     });
-    addLog(`CFG: ${pin} reset (INPUT)`);
-    // Convertir nombre de pin a número para el backend
+    
+    // Enviar reset al hardware
     const pinNum = pin === 'GPIO48' ? 48 : parseInt(pin.replace('GPIO',''));
     if (!isNaN(pinNum)) {
         sendCommand({ pin: pinNum, mode: 'INPUT', val: 0, pwm: 0, rgb: null });
@@ -65,12 +109,13 @@ export default function ESP32Dashboard() {
       const currentData = prev[pin] || { mode: 'OUTPUT', value: 0, pwm: 0, adcVal: 0, rgb: '#000000' };
       let newData = { ...currentData, [key]: val };
       
+      // Resetear valores al cambiar de modo
       if (key === 'mode') {
-        addLog(`CFG: ${pin} modo cambiado a ${val}`);
         if (val === 'OUTPUT') newData.value = 0;
         if (val === 'PWM') newData.pwm = 0;
       }
 
+      // Preparar y enviar comando
       const pinNum = pin === 'GPIO48' ? 48 : parseInt(pin.replace('GPIO',''));
       const payload = {
         pin: pinNum,
@@ -81,18 +126,14 @@ export default function ESP32Dashboard() {
       };
       
       sendCommand(payload);
-      
-      if (key === 'value') addLog(`TX: ${pin} set ${val}`);
-      if (key === 'rgb') addLog(`TX: ${pin} color ${val}`);
-
       return { ...prev, [pin]: newData };
     });
   };
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row overflow-hidden select-none bg-[#111827] text-white">
+    <div className="h-screen w-screen flex flex-col md:flex-row overflow-hidden bg-[#111827] text-white font-sans selection:bg-blue-500 selection:text-white">
       
-      {/* PANEL IZQUIERDO (SVG) */}
+      {/* PANEL IZQUIERDO (SVG PLACA) */}
       <BoardView 
         isConnected={isConnected}
         pinData={pinData}
@@ -102,7 +143,7 @@ export default function ESP32Dashboard() {
       />
 
       {/* PANEL DERECHO (CONTROLES) */}
-      <div className="w-full md:w-[400px] bg-[#161b22] flex flex-col border-l border-gray-800 shadow-2xl z-20">
+      <div className="w-full md:w-[400px] bg-[#161b22] flex flex-col border-l border-gray-800 shadow-2xl z-20 h-full">
         
         <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
           <ControlPanel 
@@ -123,7 +164,7 @@ export default function ESP32Dashboard() {
                <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-[#22c55e]"></div><span className="text-gray-300">Output HIGH</span></div>
                <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-[#14532d]"></div><span className="text-gray-500">Output LOW</span></div>
                <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-amber-500"></div><span className="text-gray-300">PWM</span></div>
-               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-purple-500"></div><span className="text-gray-300">ADC</span></div>
+               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-purple-500"></div><span className="text-gray-300">ADC / Touch</span></div>
              </div>
           </div>
         </div>

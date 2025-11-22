@@ -1,22 +1,20 @@
 #include <Arduino.h>
-#include "LedController.h"
 #include "NetworkManager.h"
 #include "WebHandler.h"
 #include "InputManager.h"
+#include "GpioController.h"
 
 void setup() {
     Serial.begin(115200);
     delay(100);
 
     // Inicialización de Módulos
-    initLeds();     // Luces
+
+    initGpio();     // GPIOs
     initInput();    // Botones
     initWiFi();     // Red (o Portal de Configuración)
     initOTA();      // Actualizaciones Aéreas
     initServer();   // Web y WebSockets
-    
-    // Señal de "Sistema Listo"
-    updateColor(0, 50, 0);
 }
 
 void loop() {

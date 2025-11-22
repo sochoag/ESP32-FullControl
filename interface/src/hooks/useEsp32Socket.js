@@ -1,11 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 
-export const useEsp32Socket = () => {
+export const useEsp32Socket = (onMessageReceived) => {
   const [isConnected, setIsConnected] = useState(false);
   const [serverLog, setServerLog] = useState([]);
   const ws = useRef(null);
+  
+  // TRUCO PROFESIONAL: Guardamos el callback en una referencia mutable.
+  // Así, el WebSocket siempre tiene acceso a la "última versión" de tu función
+  // sin tener que desconectarse y reconectarse cada vez que renderizas.
+  const onMessageRef = useRef(onMessageReceived);
 
-  // Función para añadir logs con timestamp
+  useEffect(() => {
+    onMessageRef.current = onMessageReceived;
+  }, [onMessageReceived]);
+
   const addLog = (msg) => {
     const time = new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
     setServerLog(prev => [`[${time}] ${msg}`, ...prev.slice(0, 14)]);
@@ -13,10 +21,10 @@ export const useEsp32Socket = () => {
 
   useEffect(() => {
     const hostname = window.location.hostname;
-    // Lógica para detectar si estamos en desarrollo (localhost) o producción (ESP32)
     const wsUrl = `ws://${hostname === 'localhost' ? '192.168.1.45' : hostname}/ws`;
     
     const connect = () => {
+      console.log("Intentando conectar WS a:", wsUrl);
       ws.current = new WebSocket(wsUrl);
       
       ws.current.onopen = () => {
@@ -27,19 +35,28 @@ export const useEsp32Socket = () => {
       ws.current.onclose = () => {
         setIsConnected(false);
         addLog("SISTEMA: Desconectado. Reintentando...");
-        setTimeout(connect, 3000); // Reintento automático
+        setTimeout(connect, 3000);
       };
 
       ws.current.onmessage = (event) => {
-        // Aquí procesarías mensajes entrantes si el ESP32 envía actualizaciones
+        try {
+          // console.log("WS Raw Data:", event.data); // <--- Descomenta si quieres ver TODO el tráfico en consola F12
+          const data = JSON.parse(event.data);
+          
+          // Llamamos a la función que nos pasó App.jsx usando la referencia segura
+          if (onMessageRef.current) {
+            onMessageRef.current(data);
+          }
+        } catch (e) {
+          console.error("JSON Error", e);
+        }
       };
     };
 
     connect();
     return () => { if(ws.current) ws.current.close(); };
-  }, []);
+  }, []); // Array vacío: La conexión solo se crea UNA vez al montar
 
-  // Función para enviar comandos JSON
   const sendCommand = (payload) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(payload));
@@ -49,9 +66,7 @@ export const useEsp32Socket = () => {
     return false;
   };
 
-  // Agregar función para limpiar
   const clearLogs = () => setServerLog([]);
 
-  // Retornar clearLogs
   return { isConnected, serverLog, addLog, sendCommand, clearLogs };
 };
